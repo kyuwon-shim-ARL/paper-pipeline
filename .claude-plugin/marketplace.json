@@ -1,0 +1,29 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "paper-pipeline",
+  "description": "OpenAlex paper search, collection, and sweep pipeline",
+  "owner": {
+    "name": "kyuwon-shim-ARL"
+  },
+  "plugins": [
+    {
+      "name": "paper-pipeline",
+      "description": "Search, collect, and sweep academic papers via OpenAlex with hybrid sorting, citation chaining, and multi-query support.",
+      "version": "1.0.0",
+      "author": {
+        "name": "kyuwon-shim-ARL"
+      },
+      "source": "./",
+      "category": "research",
+      "homepage": "https://github.com/kyuwon-shim-ARL/paper-pipeline",
+      "tags": [
+        "research",
+        "papers",
+        "openalex",
+        "search",
+        "citation-chaining",
+        "sweep"
+      ]
+    }
+  ]
+}

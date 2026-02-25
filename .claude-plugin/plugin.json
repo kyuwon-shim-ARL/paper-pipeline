@@ -1,0 +1,10 @@
+{
+  "name": "paper-pipeline",
+  "version": "1.0.0",
+  "description": "OpenAlex paper search, collection, and sweep pipeline with hybrid sorting and citation chaining.",
+  "author": {
+    "name": "kyuwon-shim-ARL",
+    "email": "kyuwon.shim@arl.org"
+  },
+  "skills": "./skills/"
+}
