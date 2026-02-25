@@ -1,0 +1,26 @@
+[project]
+name = "paper-pipeline"
+version = "0.2.0"
+description = "OpenAlex-based academic paper search, acquisition, analysis, and storage pipeline"
+requires-python = ">=3.9"
+dependencies = [
+    "pyalex>=0.19",
+    "requests>=2.28",
+    "PyMuPDF>=1.23",
+    "pymupdf4llm>=0.2",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+grobid = ["grobid-client-python>=0.1"]
+qa = ["paper-qa"]
+
+[project.scripts]
+paper-pipeline = "paper_pipeline.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
