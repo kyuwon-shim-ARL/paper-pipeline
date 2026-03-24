@@ -310,6 +310,66 @@ def cmd_sweep(args):
         print(f"Exported {len(export_data)} papers to {args.export}")
 
 
+def cmd_sota_expand(args):
+    """Expand forward citations from seed papers to find SOTA work."""
+    discovery = PaperDiscovery(email=args.email)
+
+    # Load seed papers
+    seeds_path = Path(args.seeds)
+    if not seeds_path.exists():
+        print(f"Error: Seeds file not found: {args.seeds}")
+        return
+
+    with open(seeds_path, "r", encoding="utf-8") as f:
+        seeds = json.load(f)
+
+    print(f"Loaded {len(seeds)} seed papers from {args.seeds}")
+
+    # Expand citations
+    papers = discovery.expand_citations(
+        seeds,
+        max_per_seed=args.max_per_seed,
+        text_filter=args.text_filter,
+        year_min=args.year_min,
+        year_max=args.year_max,
+    )
+    print(f"\nForward citation expansion -> {len(papers)} new citing papers")
+
+    # Save to store
+    store = PaperStore(args.data_dir)
+    saved = 0
+    for paper in papers:
+        if paper.get("doi"):
+            store.save_layer(paper["doi"], "L0", paper)
+            saved += 1
+    print(f"\nSaved {saved} papers with DOI to store")
+
+    # Create collection
+    if args.collection:
+        dois = [p["doi"] for p in papers if p.get("doi")]
+        store.create_collection(args.collection, dois)
+        print(f"Created collection '{args.collection}' with {len(dois)} papers")
+
+    # Export for PaperSift
+    if args.export:
+        export_data = []
+        for p in papers:
+            if p.get("doi"):
+                export_data.append({
+                    "doi": p["doi"],
+                    "title": p.get("title", ""),
+                    "year": p.get("publication_year"),
+                    "topics": p.get("topics", []),
+                    "cited_by_count": p.get("cited_by_count", 0),
+                    "referenced_works": p.get("referenced_works", []),
+                })
+        export_path = Path(args.export)
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(export_path, "w", encoding="utf-8") as f:
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
+        print(f"Exported {len(export_data)} papers to {args.export}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Paper Pipeline - Search, fetch, and manage academic papers"
@@ -370,6 +430,17 @@ def main():
     p_ask.add_argument("--collection", help="Use papers from specific collection")
     p_ask.add_argument("--email", help="Email (unused, for consistency)")
 
+    # sota-expand
+    p_sota = subparsers.add_parser("sota-expand", help="Expand forward citations from seed papers")
+    p_sota.add_argument("--seeds", required=True, help="Path to seeds JSON file (papers.json format)")
+    p_sota.add_argument("--text-filter", help="Optional fulltext.search query (e.g., 'we propose OR novel method')")
+    p_sota.add_argument("--max-per-seed", type=int, default=500, help="Max citing papers per seed paper")
+    p_sota.add_argument("--year-min", type=int, help="Minimum publication year")
+    p_sota.add_argument("--year-max", type=int, help="Maximum publication year")
+    p_sota.add_argument("--email", default="", help="Email for polite pool")
+    p_sota.add_argument("--collection", help="Save to collection")
+    p_sota.add_argument("--export", help="Export PaperSift-compatible JSON to path")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -384,6 +455,7 @@ def main():
         "grobid-status": cmd_grobid_status,
         "sweep": cmd_sweep,
         "ask": cmd_ask,
+        "sota-expand": cmd_sota_expand,
     }
 
     commands[args.command](args)
