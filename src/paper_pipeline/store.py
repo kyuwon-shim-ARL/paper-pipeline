@@ -23,7 +23,7 @@ import json
 import os
 import re
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -134,13 +134,22 @@ class PaperStore:
         dirname = doi_to_dirname(doi)
         return self.doi_dir / dirname
 
-    def save_layer(self, doi: str, layer: str, data: dict) -> Path:
+    def save_layer(
+        self,
+        doi: str,
+        layer: str,
+        data: dict,
+        provenance_entry: Optional[dict] = None,
+    ) -> Path:
         """Save a specific layer for a paper (upsert).
 
         Args:
             doi: DOI string
             layer: Layer name ("L0", "L1", "L2", "L3")
             data: JSON-serializable dict
+            provenance_entry: Optional provenance metadata to append (L0 only).
+                Required keys: session_id, timestamp, source.
+                Optional keys: search_params, cluster_id, seed_source.
 
         Returns:
             Path to saved file
@@ -155,6 +164,33 @@ class PaperStore:
         paper_dir.mkdir(parents=True, exist_ok=True)
 
         file_path = paper_dir / LAYER_FILES[layer]
+
+        # For L0: handle provenance append
+        if layer == "L0" and provenance_entry is not None:
+            # Load existing L0 to preserve provenance history
+            existing = None
+            if file_path.exists():
+                with open(file_path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+
+            # Get existing provenance array (auto-patch if missing)
+            prev_provenance = []
+            if existing and "provenance" in existing:
+                prev_provenance = existing["provenance"]
+
+            # Append new entry
+            prev_provenance.append(provenance_entry)
+            data["provenance"] = prev_provenance
+        elif layer == "L0":
+            # Ensure provenance key exists (even if empty)
+            if "provenance" not in data:
+                # Preserve existing provenance if updating L0 without new entry
+                if file_path.exists():
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+                    data["provenance"] = existing.get("provenance", [])
+                else:
+                    data["provenance"] = []
 
         # Atomic write
         fd, tmp_path = tempfile.mkstemp(dir=str(paper_dir), suffix=".json.tmp")
@@ -177,6 +213,8 @@ class PaperStore:
     def load_layer(self, doi: str, layer: str) -> Optional[dict]:
         """Load a specific layer for a paper.
 
+        Auto-patches L0 data: adds empty provenance array if missing.
+
         Args:
             doi: DOI string
             layer: Layer name ("L0", "L1", "L2", "L3")
@@ -192,7 +230,13 @@ class PaperStore:
             return None
 
         with open(file_path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+
+        # Auto-patch: ensure L0 always has provenance field
+        if layer == "L0" and "provenance" not in data:
+            data["provenance"] = []
+
+        return data
 
     def has_layer(self, doi: str, layer: str) -> bool:
         """Check if a layer exists for a paper.

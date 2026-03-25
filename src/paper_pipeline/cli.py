@@ -13,12 +13,17 @@ Usage:
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from paper_pipeline.discovery import PaperDiscovery
 from paper_pipeline.fetcher import PaperFetcher, ContentResult
 from paper_pipeline.extractor import PaperExtractor
 from paper_pipeline.store import PaperStore
+from paper_pipeline.pool import (
+    create_manifest, load_manifest, save_manifest, merge_manifests, validate_manifest,
+)
+from paper_pipeline.bibtex import export_bib
 
 
 def cmd_search(args):
@@ -39,14 +44,28 @@ def cmd_search(args):
     )
 
     store = PaperStore(args.data_dir)
+    session_id = f"search-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    search_params = {
+        "queries": [args.query],
+        "filters": filters if filters else {},
+        "sort_by": args.sort,
+    }
 
     saved = 0
     for paper in papers:
         if paper.get("doi"):
-            store.save_layer(paper["doi"], "L0", paper)
+            provenance_entry = {
+                "session_id": session_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "source": "search",
+                "search_params": search_params,
+                "cluster_id": None,
+                "seed_source": None,
+            }
+            store.save_layer(paper["doi"], "L0", paper, provenance_entry=provenance_entry)
             saved += 1
 
-    print(f"\nFound {len(papers)} papers, saved {saved} with DOI as L0")
+    print(f"\nFound {len(papers)} papers, saved {saved} with DOI as L0 (session: {session_id})")
     print(f"Store: {store.get_stats()}")
 
     if args.collection:
@@ -275,14 +294,30 @@ def cmd_sweep(args):
         papers.extend(new_papers)
         print(f"Step 2: Citation expansion -> +{len(new_papers)} papers ({len(papers)} total)")
 
-    # Step 3: Save to store
+    # Step 3: Save to store with provenance
     store = PaperStore(args.data_dir)
+    session_id = f"lit-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    search_params = {
+        "queries": queries,
+        "filters": filters if filters else {},
+        "sort_by": args.sort,
+        "hybrid": not args.no_hybrid,
+    }
+
     saved = 0
     for paper in papers:
         if paper.get("doi"):
-            store.save_layer(paper["doi"], "L0", paper)
+            provenance_entry = {
+                "session_id": session_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "source": "sweep",
+                "search_params": search_params,
+                "cluster_id": None,
+                "seed_source": None,
+            }
+            store.save_layer(paper["doi"], "L0", paper, provenance_entry=provenance_entry)
             saved += 1
-    print(f"\nSaved {saved} papers with DOI to store")
+    print(f"\nSaved {saved} papers with DOI to store (session: {session_id})")
 
     # Step 4: Create collection
     if args.collection:
@@ -335,14 +370,28 @@ def cmd_sota_expand(args):
     )
     print(f"\nForward citation expansion -> {len(papers)} new citing papers")
 
-    # Save to store
+    # Save to store with provenance
     store = PaperStore(args.data_dir)
+    session_id = f"expand-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
     saved = 0
     for paper in papers:
         if paper.get("doi"):
-            store.save_layer(paper["doi"], "L0", paper)
+            provenance_entry = {
+                "session_id": session_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "source": "expand",
+                "search_params": {
+                    "seeds_file": args.seeds,
+                    "text_filter": args.text_filter,
+                    "year_min": args.year_min,
+                    "year_max": args.year_max,
+                },
+                "cluster_id": None,
+                "seed_source": None,
+            }
+            store.save_layer(paper["doi"], "L0", paper, provenance_entry=provenance_entry)
             saved += 1
-    print(f"\nSaved {saved} papers with DOI to store")
+    print(f"\nSaved {saved} papers with DOI to store (session: {session_id})")
 
     # Create collection
     if args.collection:
@@ -368,6 +417,73 @@ def cmd_sota_expand(args):
         with open(export_path, "w", encoding="utf-8") as f:
             json.dump(export_data, f, indent=2, ensure_ascii=False)
         print(f"Exported {len(export_data)} papers to {args.export}")
+
+
+def cmd_merge_pool(args):
+    """Merge multiple pool manifests with DOI-based dedup."""
+    from glob import glob as globfn
+
+    # Collect input files
+    if args.all:
+        search_dir = args.dir if args.dir else "outputs"
+        pattern = str(Path(search_dir) / "lit_pool_*.json")
+        input_files = sorted(globfn(pattern))
+        if not input_files:
+            print(f"No pool manifests found matching {pattern}")
+            return
+        print(f"Found {len(input_files)} pool manifest(s) in {search_dir}")
+    elif args.inputs:
+        input_files = args.inputs
+    else:
+        print("Error: provide input files or use --all")
+        return
+
+    # Load all manifests
+    manifests = []
+    for path in input_files:
+        try:
+            m = load_manifest(path)
+            manifests.append(m)
+            print(f"  Loaded: {path} ({m.get('total_papers', 0)} papers)")
+        except Exception as e:
+            print(f"  [WARN] Failed to load {path}: {e}")
+
+    if not manifests:
+        print("No valid manifests to merge")
+        return
+
+    # Merge
+    store = PaperStore(args.data_dir) if not args.no_validate else None
+    merged = merge_manifests(manifests, store=store, strict=args.strict)
+
+    # Save
+    output_path = args.output or "outputs/merged_pool.json"
+    save_manifest(merged, output_path)
+    print(f"\nMerged manifest saved to {output_path}")
+
+
+def cmd_export_bib(args):
+    """Export BibTeX from a pool manifest."""
+    manifest = load_manifest(args.pool)
+    store = PaperStore(args.data_dir)
+
+    print(f"Exporting BibTeX for {manifest.get('total_papers', 0)} papers...")
+    print(f"  Source: {args.pool}")
+    print(f"  Output: {args.output}")
+
+    stats = export_bib(
+        manifest=manifest,
+        store=store,
+        output_path=args.output,
+        timeout=args.timeout,
+        max_concurrent=args.concurrent,
+    )
+
+    print(f"\nExport complete:")
+    print(f"  Total: {stats['total']}")
+    print(f"  Success: {stats['success']} (fallback: {stats['fallback']})")
+    print(f"  Failed: {stats['failed']}")
+    print(f"  Skipped (existing): {stats['skipped']}")
 
 
 def main():
@@ -430,6 +546,28 @@ def main():
     p_ask.add_argument("--collection", help="Use papers from specific collection")
     p_ask.add_argument("--email", help="Email (unused, for consistency)")
 
+    # merge-pool
+    p_merge = subparsers.add_parser("merge-pool", help="Merge multiple pool manifests")
+    p_merge.add_argument("inputs", nargs="*", help="Input pool manifest files")
+    p_merge.add_argument("-o", "--output", help="Output merged manifest path")
+    p_merge.add_argument("--all", action="store_true",
+        help="Auto-discover pool manifests (default: outputs/lit_pool_*.json)")
+    p_merge.add_argument("--dir", help="Directory for --all discovery (overrides default)")
+    p_merge.add_argument("--strict", action="store_true",
+        help="Error on orphan DOIs (DOIs not in PaperStore)")
+    p_merge.add_argument("--no-validate", action="store_true",
+        help="Skip PaperStore validation")
+
+    # export-bib
+    p_bib = subparsers.add_parser("export-bib", help="Export BibTeX from pool manifest")
+    p_bib.add_argument("pool", help="Pool manifest JSON file")
+    p_bib.add_argument("-o", "--output", default="references.bib",
+        help="Output .bib file path (default: references.bib)")
+    p_bib.add_argument("--timeout", type=int, default=300,
+        help="Global timeout in seconds (default: 300)")
+    p_bib.add_argument("--concurrent", type=int, default=5,
+        help="Max concurrent doi2bib calls (default: 5)")
+
     # sota-expand
     p_sota = subparsers.add_parser("sota-expand", help="Expand forward citations from seed papers")
     p_sota.add_argument("--seeds", required=True, help="Path to seeds JSON file (papers.json format)")
@@ -456,6 +594,8 @@ def main():
         "sweep": cmd_sweep,
         "ask": cmd_ask,
         "sota-expand": cmd_sota_expand,
+        "merge-pool": cmd_merge_pool,
+        "export-bib": cmd_export_bib,
     }
 
     commands[args.command](args)
