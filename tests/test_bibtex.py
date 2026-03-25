@@ -245,3 +245,65 @@ class TestExportBib:
             stats = export_bib(manifest, store_with_papers, output)
             # Should still succeed via fallback
             assert stats["success"] + stats["failed"] == 1
+
+
+import shutil
+
+
+def _doi2bib_available() -> bool:
+    """Check if doi2bib CLI is installed and reachable."""
+    return shutil.which("doi2bib") is not None
+
+
+@pytest.mark.skipif(not _doi2bib_available(), reason="doi2bib CLI not installed")
+class TestDoi2bibIntegration:
+    """Integration tests using real doi2bib CLI (skipped if not installed)."""
+
+    def test_call_doi2bib_real(self):
+        """Real doi2bib call with a known DOI returns valid BibTeX."""
+        result = _call_doi2bib("10.1038/s41586-023-06415-8")
+        assert result is not None
+        assert "@" in result
+        assert "2023" in result
+
+    def test_export_bib_real_with_fallback(self, tmp_path):
+        """End-to-end export: real doi2bib for valid DOI, fallback for fake DOI."""
+        store = PaperStore(str(tmp_path / "papers"))
+
+        # Real DOI (doi2bib should succeed)
+        real_doi = "10.1038/s41586-023-06415-8"
+        store.save_layer(real_doi, "L0", {
+            "doi": real_doi,
+            "title": "De novo design of protein structure and function with RFdiffusion",
+            "publication_year": 2023,
+            "authorships": [{"author": {"display_name": "Joseph L. Watson"}}],
+            "primary_location": {"source": {"display_name": "Nature", "type": "journal"}},
+            "biblio": {},
+        })
+
+        # Fake DOI (doi2bib will fail, fallback to OpenAlex metadata)
+        fake_doi = "10.9999/nonexistent-doi-test"
+        store.save_layer(fake_doi, "L0", {
+            "doi": fake_doi,
+            "title": "Fake Paper for Fallback Test",
+            "publication_year": 2025,
+            "authorships": [{"author": {"display_name": "Test Author"}}],
+            "primary_location": {"source": {"display_name": "TestJournal", "type": "journal"}},
+            "biblio": {},
+        })
+
+        manifest = {
+            "schema_version": 1,
+            "papers": [{"doi": real_doi}, {"doi": fake_doi}],
+        }
+        output = tmp_path / "refs.bib"
+        stats = export_bib(manifest, store, output, timeout=30)
+
+        assert stats["total"] == 2
+        assert stats["success"] == 2
+        # At least one should use fallback (the fake DOI)
+        assert stats["fallback"] >= 1
+
+        content = output.read_text()
+        assert "@article{" in content
+        assert "watson2023" in content.lower() or "rfdiffusion" in content.lower()
