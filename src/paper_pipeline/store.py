@@ -1,14 +1,12 @@
 """
-Paper Store - Hierarchical storage for paper data (L0-L3 layers).
+Paper Store - Hierarchical storage for paper data (L0/L2 layers).
 
 Storage layout:
     data/papers/
     ├── index.json
     ├── by-doi/{doi_dirname}/
     │   ├── metadata.json      (L0)
-    │   ├── abstract.json      (L1)
     │   ├── sections.json      (L2)
-    │   ├── analysis.json      (L3)
     │   ├── content/           (git-ignored)
     │   │   ├── fulltext.md
     │   │   ├── raw_abstract.txt
@@ -30,9 +28,7 @@ from typing import Any, Optional
 
 LAYER_FILES = {
     "L0": "metadata.json",
-    "L1": "abstract.json",
     "L2": "sections.json",
-    "L3": "analysis.json",
 }
 
 CONTENT_FILES = {
@@ -65,7 +61,7 @@ def doi_to_dirname(doi: str) -> str:
 
 
 class PaperStore:
-    """Hierarchical paper storage with L0-L3 layers.
+    """Hierarchical paper storage with L0/L2 layers.
 
     Usage:
         store = PaperStore("data/papers")
@@ -145,7 +141,7 @@ class PaperStore:
 
         Args:
             doi: DOI string
-            layer: Layer name ("L0", "L1", "L2", "L3")
+            layer: Layer name ("L0", "L2")
             data: JSON-serializable dict
             provenance_entry: Optional provenance metadata to append (L0 only).
                 Required keys: session_id, timestamp, source.
@@ -217,7 +213,7 @@ class PaperStore:
 
         Args:
             doi: DOI string
-            layer: Layer name ("L0", "L1", "L2", "L3")
+            layer: Layer name ("L0", "L2")
 
         Returns:
             Layer data dict or None if not found
@@ -312,7 +308,7 @@ class PaperStore:
                 "openalex_id": "",
                 "title": "",
                 "year": None,
-                "layers": {"L0": False, "L1": False, "L2": False, "L3": False},
+                "layers": {"L0": False, "L2": False},
                 "oa_status": None,
                 "content_source": None,
                 "content_available": False,
@@ -475,7 +471,7 @@ class PaperStore:
 
         # Layers status
         layers_status = []
-        for layer in ["L0", "L1", "L2", "L3"]:
+        for layer in ["L0", "L2"]:
             status = "available" if self.has_layer(doi, layer) else "not generated"
             layers_status.append(f"- {layer}: {status}")
         lines.append("## Analysis Layers")
@@ -555,7 +551,7 @@ class PaperStore:
             Dict with paper count, layer counts, collection counts
         """
         papers = self.index.get("papers", {})
-        layer_counts = {"L0": 0, "L1": 0, "L2": 0, "L3": 0}
+        layer_counts = {"L0": 0, "L2": 0}
         for p in papers.values():
             for layer, has in p.get("layers", {}).items():
                 if has:
