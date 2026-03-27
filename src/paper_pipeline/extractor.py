@@ -46,6 +46,15 @@ class PaperExtractor:
         """
         self.grobid_url = grobid_url
         self.grobid_available = self._check_grobid()
+        self.docling_available = self._check_docling()
+
+    def _check_docling(self) -> bool:
+        """Check if docling is installed."""
+        try:
+            from docling.document_converter import DocumentConverter  # noqa: F401
+            return True
+        except ImportError:
+            return False
 
     def extract(self, content_result, pdf_path: Optional[str] = None) -> ExtractionResult:
         """Extract text based on ContentResult type.
@@ -66,7 +75,14 @@ class PaperExtractor:
                 result = self.extract_from_pdf_grobid(effective_pdf)
                 if result and result.sections:
                     return result
-            return self.extract_from_pdf_pymupdf(effective_pdf)
+            pymupdf_result = self.extract_from_pdf_pymupdf(effective_pdf)
+            if pymupdf_result and pymupdf_result.full_text and len(pymupdf_result.sections) >= 2:
+                return pymupdf_result
+            if self.docling_available:
+                docling_result = self.extract_from_pdf_docling(effective_pdf)
+                if docling_result and docling_result.full_text and len(docling_result.sections) >= 2:
+                    return docling_result
+            return pymupdf_result
 
         # No content to extract
         return ExtractionResult(extraction_method="none")
@@ -222,6 +238,84 @@ class PaperExtractor:
             abstract=abstract,
             full_text="\n\n".join(full_text_parts),
             extraction_method="grobid",
+        )
+
+    def extract_from_pdf_docling(self, pdf_path: str, timeout: int = 120) -> ExtractionResult:
+        """Extract text from PDF via docling with timeout protection.
+
+        Falls back gracefully on ImportError, TimeoutError, empty output, or
+        fewer than 2 sections (indicating poor extraction quality).
+
+        Args:
+            pdf_path: Path to PDF file
+            timeout: Max seconds to wait for docling (default 120)
+
+        Returns:
+            ExtractionResult with sections and full text, or error result
+        """
+        try:
+            from docling.document_converter import DocumentConverter  # noqa: F401
+        except ImportError:
+            return ExtractionResult(extraction_method="docling_unavailable")
+
+        try:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(self._run_docling, pdf_path)
+                result = future.result(timeout=timeout)
+            if not result or len(result.full_text) == 0:
+                return ExtractionResult(extraction_method="docling_empty")
+            if len(result.sections) < 2:
+                return ExtractionResult(extraction_method="docling_poor")
+            return result
+        except concurrent.futures.TimeoutError:
+            return ExtractionResult(extraction_method="docling_timeout")
+        except Exception:
+            return ExtractionResult(extraction_method="docling_error")
+
+    def _run_docling(self, pdf_path: str) -> ExtractionResult:
+        """Internal docling worker — runs in thread pool for timeout support.
+
+        Detects scanned PDFs via pymupdf text length heuristic and enables
+        OCR mode automatically.
+
+        Args:
+            pdf_path: Path to PDF file
+
+        Returns:
+            ExtractionResult with sections and full text
+        """
+        from docling.document_converter import DocumentConverter
+
+        # Scan detection: if all pages have < 100 chars, treat as scanned
+        is_scan = False
+        try:
+            import pymupdf
+            doc_pymupdf = pymupdf.open(pdf_path)
+            is_scan = all(len(page.get_text()) < 100 for page in doc_pymupdf)
+            doc_pymupdf.close()
+        except Exception:
+            pass
+
+        if is_scan:
+            try:
+                from docling.datamodel.pipeline_options import PdfPipelineOptions
+                pipeline_options = PdfPipelineOptions(do_ocr=True)
+                converter = DocumentConverter(
+                    format_options={"pdf": {"pipeline_options": pipeline_options}}
+                )
+            except Exception:
+                converter = DocumentConverter()
+        else:
+            converter = DocumentConverter()
+
+        result = converter.convert(pdf_path)
+        md_text = result.document.export_to_markdown()
+        sections = self._regex_segment(md_text)
+        return ExtractionResult(
+            sections=sections,
+            full_text=md_text,
+            extraction_method="docling",
         )
 
     def extract_from_pdf_pymupdf(self, pdf_path: str) -> ExtractionResult:
