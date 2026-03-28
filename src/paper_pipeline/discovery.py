@@ -13,6 +13,8 @@ from pyalex import Works, Authors
 from typing import Optional
 from tqdm import tqdm
 
+from paper_pipeline.utils import clean_doi
+
 
 class PaperDiscovery:
     """PyAlex-based paper search with progress tracking.
@@ -288,7 +290,7 @@ class PaperDiscovery:
                     for page in q.paginate(per_page=200, n_max=max_per_seed):
                         for work in page:
                             # Dedup by DOI
-                            doi = (work.get("doi") or "").replace("https://doi.org/", "").replace("http://doi.org/", "").strip().lower()
+                            doi = clean_doi(work.get("doi") or "").lower()
                             oa_id = (work.get("id") or "").replace("https://openalex.org/", "")
 
                             if doi and doi in known_dois:
@@ -320,9 +322,9 @@ class PaperDiscovery:
         Returns:
             Normalized paper dict or None
         """
-        clean_doi = doi.replace("https://doi.org/", "").replace("http://doi.org/", "")
+        _doi = clean_doi(doi)
         try:
-            work = Works()[f"https://doi.org/{clean_doi}"]
+            work = Works()[f"https://doi.org/{_doi}"]
             if work:
                 return self._normalize_work(work)
         except Exception:
@@ -343,8 +345,7 @@ class PaperDiscovery:
         for i in tqdm(range(0, len(dois), batch_size), desc="Fetching DOIs", unit="batch"):
             batch = dois[i : i + batch_size]
             doi_filter = "|".join(
-                d.replace("https://doi.org/", "").replace("http://doi.org/", "")
-                for d in batch
+                clean_doi(d) for d in batch
             )
             try:
                 for page in Works().filter(doi=doi_filter).paginate(
@@ -436,8 +437,7 @@ class PaperDiscovery:
         Returns:
             Normalized paper dict
         """
-        doi_raw = work.get("doi") or ""
-        doi = doi_raw.replace("https://doi.org/", "").replace("http://doi.org/", "")
+        doi = clean_doi(work.get("doi") or "")
 
         primary_loc = work.get("primary_location") or {}
         source = primary_loc.get("source") or {}

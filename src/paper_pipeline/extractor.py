@@ -11,8 +11,11 @@ GROBID TEI parsing has 2-tier fallback:
     - xml.etree.ElementTree direct parsing (always available)
 """
 
+import functools
 import re
 import xml.etree.ElementTree as ET
+
+import defusedxml.ElementTree as SafeET
 import requests
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,8 +48,20 @@ class PaperExtractor:
             grobid_url: GROBID service URL
         """
         self.grobid_url = grobid_url
-        self.grobid_available = self._check_grobid()
         self.docling_available = self._check_docling()
+
+    @functools.cached_property
+    def grobid_available(self) -> bool:
+        """Check if GROBID service is running (lazy, cached).
+
+        Returns:
+            True if GROBID is alive
+        """
+        try:
+            resp = requests.get(f"{self.grobid_url}/api/isalive", timeout=3)
+            return resp.status_code == 200
+        except Exception:
+            return False
 
     def _check_docling(self) -> bool:
         """Check if docling is installed."""
@@ -103,7 +118,7 @@ class PaperExtractor:
             ExtractionResult with structured sections
         """
         try:
-            root = ET.fromstring(xml_content)
+            root = SafeET.fromstring(xml_content)
         except ET.ParseError:
             return ExtractionResult(extraction_method="europe_pmc_xml")
 
@@ -407,7 +422,7 @@ class PaperExtractor:
 
         # Tier 2: ElementTree direct parsing
         try:
-            root = ET.fromstring(tei_xml)
+            root = SafeET.fromstring(tei_xml)
             ns = {"tei": "http://www.tei-c.org/ns/1.0"}
 
             sections = {}
@@ -437,7 +452,7 @@ class PaperExtractor:
             Abstract text or None
         """
         try:
-            root = ET.fromstring(tei_xml)
+            root = SafeET.fromstring(tei_xml)
             ns = {"tei": "http://www.tei-c.org/ns/1.0"}
             abstract_el = root.find(".//tei:profileDesc/tei:abstract", ns)
             if abstract_el is not None:
@@ -488,14 +503,3 @@ class PaperExtractor:
 
         return sections
 
-    def _check_grobid(self) -> bool:
-        """Check if GROBID service is running.
-
-        Returns:
-            True if GROBID is alive
-        """
-        try:
-            resp = requests.get(f"{self.grobid_url}/api/isalive", timeout=3)
-            return resp.status_code == 200
-        except Exception:
-            return False

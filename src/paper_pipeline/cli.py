@@ -462,6 +462,77 @@ def cmd_merge_pool(args):
     print(f"\nMerged manifest saved to {output_path}")
 
 
+def cmd_provenance(args):
+    """Show provenance history for a paper."""
+    store = PaperStore(args.data_dir)
+    l0 = store.load_layer(args.doi, "L0")
+    if not l0:
+        print(f"No L0 metadata found for {args.doi}")
+        sys.exit(1)
+
+    provenance = l0.get("provenance", [])
+    title = l0.get("title", "Unknown")
+    print(f"Provenance for: {title}")
+    print(f"DOI: {args.doi}")
+    print(f"Total entries: {len(provenance)}")
+    print()
+
+    if not provenance:
+        print("  (no provenance entries)")
+        return
+
+    for i, entry in enumerate(provenance, 1):
+        print(f"  [{i}] {entry.get('timestamp', 'N/A')}")
+        print(f"      Session: {entry.get('session_id', 'N/A')}")
+        print(f"      Source:  {entry.get('source', 'N/A')}")
+        params = entry.get("search_params", {})
+        if params:
+            print(f"      Params:  {json.dumps(params, ensure_ascii=False)}")
+        print()
+
+
+def cmd_search_local(args):
+    """Search stored content for a keyword."""
+    store = PaperStore(args.data_dir)
+    papers = store.list_papers()
+    keyword = args.keyword.lower()
+    matches = []
+
+    for paper in papers:
+        doi = paper.get("paper_id", "")
+        # Reverse paper_id to DOI for loading
+        # Find actual DOI from index
+        for idx_doi, idx_entry in store.index.get("papers", {}).items():
+            if idx_entry.get("paper_id") == doi:
+                doi = idx_doi
+                break
+
+        # Search in title
+        title = paper.get("title", "")
+        if keyword in title.lower():
+            matches.append({"doi": doi, "title": title, "match_in": "title"})
+            continue
+
+        # Search in fulltext content
+        content = store.load_content(doi, "fulltext")
+        if content and keyword in content.lower():
+            # Find context snippet
+            idx = content.lower().index(keyword)
+            start = max(0, idx - 50)
+            end = min(len(content), idx + len(keyword) + 50)
+            snippet = content[start:end].replace("\n", " ")
+            matches.append({"doi": doi, "title": title, "match_in": "fulltext", "snippet": snippet})
+
+    print(f"Search results for '{args.keyword}': {len(matches)} matches")
+    print()
+    for m in matches:
+        print(f"  {m['title']}")
+        print(f"    DOI: {m['doi']} | Found in: {m['match_in']}")
+        if m.get("snippet"):
+            print(f"    ...{m['snippet']}...")
+        print()
+
+
 def cmd_export_bib(args):
     """Export BibTeX from a pool manifest."""
     manifest = load_manifest(args.pool)
@@ -568,6 +639,14 @@ def main():
     p_bib.add_argument("--concurrent", type=int, default=5,
         help="Max concurrent doi2bib calls (default: 5)")
 
+    # provenance
+    p_prov = subparsers.add_parser("provenance", help="Show provenance history for a paper")
+    p_prov.add_argument("doi", help="DOI to look up")
+
+    # search-local
+    p_slocal = subparsers.add_parser("search-local", help="Search stored content for keyword")
+    p_slocal.add_argument("keyword", help="Keyword to search for")
+
     # sota-expand
     p_sota = subparsers.add_parser("sota-expand", help="Expand forward citations from seed papers")
     p_sota.add_argument("--seeds", required=True, help="Path to seeds JSON file (papers.json format)")
@@ -596,6 +675,8 @@ def main():
         "sota-expand": cmd_sota_expand,
         "merge-pool": cmd_merge_pool,
         "export-bib": cmd_export_bib,
+        "provenance": cmd_provenance,
+        "search-local": cmd_search_local,
     }
 
     commands[args.command](args)

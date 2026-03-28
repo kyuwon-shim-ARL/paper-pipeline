@@ -17,6 +17,7 @@ Storage layout:
         └── {name}/collection.json
 """
 
+import contextlib
 import json
 import os
 import re
@@ -24,6 +25,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+
+from paper_pipeline.utils import clean_doi
 
 
 LAYER_FILES = {
@@ -54,7 +57,7 @@ def doi_to_dirname(doi: str) -> str:
         >>> doi_to_dirname("10.1038/s41586-024-07345-x")
         '10_1038__s41586-024-07345-x'
     """
-    doi = doi.replace("https://doi.org/", "").replace("http://doi.org/", "")
+    doi = clean_doi(doi)
     safe = doi.replace("/", "__")
     safe = re.sub(r"[^a-zA-Z0-9._\-]", lambda m: f"_{ord(m.group()):02x}_", safe)
     return safe
@@ -88,6 +91,7 @@ class PaperStore:
 
         # Load or create index
         self.index = self._load_index()
+        self._batch_mode = False
 
     def _load_index(self) -> dict:
         """Load index.json or create empty index."""
@@ -101,8 +105,31 @@ class PaperStore:
             "papers": {},
         }
 
+    @contextlib.contextmanager
+    def batch_context(self):
+        """Context manager to defer index saves during batch operations.
+
+        Usage:
+            with store.batch_context():
+                for doi in dois:
+                    store.save_layer(doi, "L0", data)
+            # index is saved once on exit
+        """
+        self._batch_mode = True
+        try:
+            yield self
+        finally:
+            self._batch_mode = False
+            self._save_index()
+
     def _save_index(self) -> None:
-        """Save index.json atomically (write to temp, then rename)."""
+        """Save index.json atomically (write to temp, then rename).
+
+        Skipped during batch_context(); saved once on context exit.
+        """
+        if self._batch_mode:
+            return
+
         self.index["last_updated"] = datetime.now().strftime("%Y-%m-%d")
         self.index["paper_count"] = len(self.index["papers"])
 
@@ -200,8 +227,7 @@ class PaperStore:
             raise
 
         # Update index
-        clean_doi = doi.replace("https://doi.org/", "").replace("http://doi.org/", "")
-        self._update_index_entry(clean_doi, layer, data if layer == "L0" else None)
+        self._update_index_entry(clean_doi(doi), layer, data if layer == "L0" else None)
         self._save_index()
 
         return file_path
@@ -335,11 +361,11 @@ class PaperStore:
             content_source: e.g., "europe_pmc_xml", "unpaywall", "openalex_oa"
             extraction_method: e.g., "europe_pmc_xml", "grobid", "pymupdf4llm"
         """
-        clean_doi = doi.replace("https://doi.org/", "").replace("http://doi.org/", "")
-        if clean_doi in self.index["papers"]:
-            self.index["papers"][clean_doi]["content_source"] = content_source
-            self.index["papers"][clean_doi]["content_available"] = True
-            self.index["papers"][clean_doi]["extraction_method"] = extraction_method
+        _doi = clean_doi(doi)
+        if _doi in self.index["papers"]:
+            self.index["papers"][_doi]["content_source"] = content_source
+            self.index["papers"][_doi]["content_available"] = True
+            self.index["papers"][_doi]["extraction_method"] = extraction_method
             self._save_index()
 
     def list_papers(self, filters: Optional[dict] = None) -> list[dict]:
@@ -392,7 +418,7 @@ class PaperStore:
         coll_data = {
             "name": name,
             "created": datetime.now().strftime("%Y-%m-%d"),
-            "dois": [d.replace("https://doi.org/", "").replace("http://doi.org/", "") for d in dois],
+            "dois": [clean_doi(d) for d in dois],
             "count": len(dois),
         }
 
@@ -455,13 +481,13 @@ class PaperStore:
         if not l0:
             return None
 
-        clean_doi = doi.replace("https://doi.org/", "").replace("http://doi.org/", "")
+        _doi = clean_doi(doi)
         paper_dir = self.get_paper_dir(doi)
 
         lines = [
             f"# {l0.get('title', 'Unknown Title')}",
             "",
-            f"- **DOI**: {clean_doi}",
+            f"- **DOI**: {_doi}",
             f"- **Year**: {l0.get('publication_year', 'N/A')}",
             f"- **Journal**: {l0.get('journal', 'N/A')}",
             f"- **Citations**: {l0.get('cited_by_count', 0)}",

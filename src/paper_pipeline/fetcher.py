@@ -10,12 +10,15 @@ Fallback chain:
 """
 
 import os
+import re
 import time
 import tempfile
 import requests
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
+
+from paper_pipeline.utils import clean_doi
 
 
 @dataclass
@@ -94,10 +97,10 @@ class PaperFetcher:
             ContentResult with source, type, and data/path
         """
         self.stats["total_attempts"] += 1
-        clean_doi = doi.replace("https://doi.org/", "").replace("http://doi.org/", "")
+        doi = clean_doi(doi)
 
         # 1. Europe PMC full-text XML (best)
-        xml = self.fetch_europe_pmc_fulltext(clean_doi)
+        xml = self.fetch_europe_pmc_fulltext(doi)
         if xml:
             self._record_success("europe_pmc")
             return ContentResult(
@@ -110,7 +113,7 @@ class PaperFetcher:
         if work_data:
             pdf_url = work_data.get("pdf_url") or work_data.get("oa_url")
             if pdf_url:
-                pdf_path = self._download_pdf_to(pdf_url, clean_doi, save_dir)
+                pdf_path = self._download_pdf_to(pdf_url, doi, save_dir)
                 if pdf_path:
                     self._record_success("openalex_oa")
                     return ContentResult(
@@ -120,9 +123,9 @@ class PaperFetcher:
                     )
 
         # 3. Unpaywall
-        unpaywall_url = self.fetch_unpaywall_url(clean_doi)
+        unpaywall_url = self.fetch_unpaywall_url(doi)
         if unpaywall_url:
-            pdf_path = self._download_pdf_to(unpaywall_url, clean_doi, save_dir)
+            pdf_path = self._download_pdf_to(unpaywall_url, doi, save_dir)
             if pdf_path:
                 self._record_success("unpaywall")
                 return ContentResult(
@@ -132,10 +135,10 @@ class PaperFetcher:
                 )
 
         # 4. bioRxiv/medRxiv (DOI 10.1101/)
-        if clean_doi.startswith("10.1101/"):
-            biorxiv_url = self._get_biorxiv_pdf_url(clean_doi)
+        if doi.startswith("10.1101/"):
+            biorxiv_url = self._get_biorxiv_pdf_url(doi)
             if biorxiv_url:
-                pdf_path = self._download_pdf_to(biorxiv_url, clean_doi, save_dir)
+                pdf_path = self._download_pdf_to(biorxiv_url, doi, save_dir)
                 if pdf_path:
                     self._record_success("biorxiv")
                     return ContentResult(
@@ -145,9 +148,9 @@ class PaperFetcher:
                     )
 
         # 5. CrossRef publisher links
-        crossref_url = self._get_crossref_pdf_url(clean_doi)
+        crossref_url = self._get_crossref_pdf_url(doi)
         if crossref_url:
-            pdf_path = self._download_pdf_to(crossref_url, clean_doi, save_dir)
+            pdf_path = self._download_pdf_to(crossref_url, doi, save_dir)
             if pdf_path:
                 self._record_success("crossref")
                 return ContentResult(
@@ -304,24 +307,36 @@ class PaperFetcher:
         except requests.RequestException:
             return False
 
+    @staticmethod
+    def _doi_to_dirname_default(doi: str) -> str:
+        """Convert DOI to safe directory name (inline fallback).
+
+        Replicates store.doi_to_dirname logic to avoid cross-layer coupling.
+        """
+        safe = doi.replace("/", "__")
+        safe = re.sub(r"[^a-zA-Z0-9._\-]", lambda m: f"_{ord(m.group()):02x}_", safe)
+        return safe
+
     def _download_pdf_to(self, url: str, doi: str,
-                         save_dir: Optional[str] = None) -> Optional[str]:
+                         save_dir: Optional[str] = None,
+                         path_resolver: Optional[Callable[[str], str]] = None) -> Optional[str]:
         """Download PDF to paper's content directory.
 
         Args:
             url: PDF URL
             doi: Clean DOI for directory name
             save_dir: Override save directory
+            path_resolver: Optional callable(doi) -> dirname. Defaults to
+                inline doi_to_dirname logic (no store import needed).
 
         Returns:
             Path string if successful, None otherwise
         """
-        from paper_pipeline.store import doi_to_dirname
-
         if save_dir:
             pdf_path = os.path.join(save_dir, "content", "source.pdf")
         else:
-            dirname = doi_to_dirname(doi)
+            resolver = path_resolver or self._doi_to_dirname_default
+            dirname = resolver(doi)
             pdf_path = str(self.pdf_dir / "by-doi" / dirname / "content" / "source.pdf")
 
         if self.download_pdf(url, pdf_path):
