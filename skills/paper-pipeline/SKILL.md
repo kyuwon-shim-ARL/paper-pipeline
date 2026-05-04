@@ -83,9 +83,18 @@ if extraction.full_text:
   "objective": "1-2문장으로 연구 목적",
   "methods": "1-2문장으로 핵심 방법론 (사용된 도구/데이터셋 포함)",
   "key_findings": ["구체적 수치 포함 발견 1", "발견 2", "발견 3"],
-  "significance": "1문장으로 학술적 의의"
+  "significance": "1문장으로 학술적 의의",
+  "direction": {
+    "enables": ["이 논문이 가능하게 한 후속 연구/응용 (각 80자 이내, 최대 5개)"],
+    "blocked_by": ["명시된 한계/실패 (각 80자 이내, 최대 5개)"],
+    "opens_questions": ["명시적으로 제기한 후속 질문 (각 80자 이내, 최대 5개)"],
+    "extraction_confidence": "abstract만으로는 'medium' 또는 'placeholder'. 본문 없이 추측 금지.",
+    "_extraction_method": "abstract_only"
+  }
 }
 ```
+
+참고 (LIT-DS-001 A2): `direction` 필드는 lit/dr 파이프라인의 Direction tag schema (omc-research-skills `.omc/state/direction-tag.schema.json`)와 정렬. enables/blocked_by 둘 다 비면 `extraction_confidence: "placeholder"`. abstract만으로 추출 시 1-2개가 정상.
 
 **저장**: `store.save_layer(doi, "L1", analysis)`
 
@@ -122,11 +131,20 @@ DOI: {doi}
   "methods": "핵심 방법론 요약 (2-3문장, 도구/데이터셋 포함)",
   "results": ["주요 결과 1 (구체적 수치)", "주요 결과 2", "주요 결과 3"],
   "discussion": "핵심 해석 및 시사점 (2-3문장)",
-  "limitations": ["한계점 1", "한계점 2"]
+  "limitations": ["한계점 1", "한계점 2"],
+  "direction": {
+    "enables": ["이 논문이 가능하게 한 후속 연구/응용 — full text 기반 (각 80자, 최대 5개)"],
+    "blocked_by": ["명시된 한계/실패 — limitations 섹션 + discussion 결합 (각 80자, 최대 5개)"],
+    "opens_questions": ["future work 또는 discussion의 explicit question (각 80자, 최대 5개)"],
+    "extraction_confidence": "high (full text 사용)",
+    "_extraction_method": "abstract+full_text"
+  }
 }
 
 참고: extraction_method가 'pymupdf4llm'인 경우 섹션 구분이 불명확할 수 있으니
 내용 기반으로 섹션을 추론하세요.
+
+참고 (LIT-DS-001 A2): `direction` 필드는 lit/dr 파이프라인의 Direction tag schema와 정렬. L2는 full text 기반이므로 `extraction_confidence: "high"`. enables/blocked_by 각 3-5개 채우기 가능.
 ```
 
 **저장**: `store.save_layer(doi, "L2", analysis)`
