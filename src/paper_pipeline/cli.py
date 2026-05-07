@@ -20,6 +20,7 @@ from paper_pipeline.discovery import PaperDiscovery
 from paper_pipeline.fetcher import PaperFetcher, ContentResult
 from paper_pipeline.extractor import PaperExtractor
 from paper_pipeline.store import PaperStore
+from paper_pipeline.utils import clean_doi
 from paper_pipeline.pool import (
     create_manifest, load_manifest, save_manifest, merge_manifests, validate_manifest,
 )
@@ -533,6 +534,44 @@ def cmd_search_local(args):
         print()
 
 
+def cmd_zotero_sync(args):
+    """Sync PDFs from a local Zotero library into PaperStore."""
+    from paper_pipeline.zotero_sync import ZoteroSync
+
+    store = PaperStore(args.data_dir)
+    sync = ZoteroSync(
+        zotero_dir=args.zotero,
+        store=store,
+        copy_mode="symlink" if args.symlink else "copy",
+    )
+
+    doi_filter = None
+    if args.collection:
+        coll_dois = store.get_collection(args.collection)
+        if not coll_dois:
+            print(f"Collection '{args.collection}' not found")
+            return
+        doi_filter = {clean_doi(d) for d in coll_dois}
+        print(f"Filtering to collection '{args.collection}': {len(doi_filter)} DOIs")
+    elif args.doi:
+        doi_filter = {clean_doi(args.doi)}
+
+    stats = sync.sync_all(doi_filter=doi_filter, skip_existing_pdf=not args.force)
+
+    print(f"\nZotero sync complete:")
+    print(f"  Attachments with DOI: {stats['total_attachments_with_doi']}")
+    print(f"  Synced: {stats['synced']}")
+    print(f"  Errors: {stats['errors']}")
+
+    if args.verbose or stats["errors"]:
+        for r in stats["results"]:
+            if "error" in r:
+                print(f"  [ERROR] {r['doi']}: {r['error']}")
+            elif args.verbose:
+                tag = "L0+pdf" if r["l0_written"] else "pdf"
+                print(f"  [{r['pdf_action']:7}] {tag} {r['doi']} ({r['pdf_size']:,} B)")
+
+
 def cmd_export_bib(args):
     """Export BibTeX from a pool manifest."""
     manifest = load_manifest(args.pool)
@@ -647,6 +686,21 @@ def main():
     p_slocal = subparsers.add_parser("search-local", help="Search stored content for keyword")
     p_slocal.add_argument("keyword", help="Keyword to search for")
 
+    # zotero-sync
+    p_zsync = subparsers.add_parser("zotero-sync",
+        help="Sync PDFs from a local Zotero library into PaperStore")
+    p_zsync.add_argument("--zotero", default="~/Zotero",
+        help="Zotero data directory (default: ~/Zotero)")
+    p_zsync.add_argument("--collection",
+        help="Only sync DOIs in this paper-pipeline collection")
+    p_zsync.add_argument("--doi", help="Sync a single DOI only")
+    p_zsync.add_argument("--symlink", action="store_true",
+        help="Symlink PDFs from Zotero storage instead of copying")
+    p_zsync.add_argument("--force", action="store_true",
+        help="Overwrite existing source.pdf in store")
+    p_zsync.add_argument("-v", "--verbose", action="store_true",
+        help="Print per-DOI sync result")
+
     # sota-expand
     p_sota = subparsers.add_parser("sota-expand", help="Expand forward citations from seed papers")
     p_sota.add_argument("--seeds", required=True, help="Path to seeds JSON file (papers.json format)")
@@ -677,6 +731,7 @@ def main():
         "export-bib": cmd_export_bib,
         "provenance": cmd_provenance,
         "search-local": cmd_search_local,
+        "zotero-sync": cmd_zotero_sync,
     }
 
     commands[args.command](args)
